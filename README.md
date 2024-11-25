@@ -1,5 +1,6 @@
 The “production” script looks for a csv titled “new_data.csv” in the same directory, and outputs a csv titled “new_output.csv” in that same directory. 
 The csv output from the “production” script includes the following fields:
+
 •	Catcher ID
 •	Year
 •	Opportunities (total “takes” with tracking data received by a catcher in each season)
