@@ -1,0 +1,144 @@
+---
+title: "production"
+output: html_document
+date: "2024-10-28"
+---
+
+```{r}
+# Library import
+library(dplyr) # data manipulation help
+library(readr) # loading in files
+library(caret) # random forest model
+```
+
+```{r}
+# Change this to your directory where ML_TAKES_ENCODED.csv lies
+setwd("/Your/Directory")
+```
+
+
+```{r}
+# Training the random forest model
+train_random_forest_model <- 
+  function(training_data_path = "ML_TAKES_ENCODED.csv") {
+  
+  # Load training data
+  data <- read_csv(training_data_path)
+  
+  # Adding a categorical variable to capture potential umpire bias on 3-0 and 
+  # 0-2 counts
+  data <- data %>%
+  mutate(
+    Balls3_Strikes0 = as.factor(ifelse(BALLS == 3 & STRIKES == 0, 
+                                       'Count 3-0', 'Count not 3-0')), 
+    Balls0_Strikes2 = as.factor(ifelse(BALLS == 0 & STRIKES == 2, 
+                                       'Count 0-2', 'Count not 0-2'))  
+  )
+  
+  # Preprocess target variable by converting it to a factor
+  data$PITCHCALL <- as.factor(ifelse(data$PITCHCALL == "StrikeCalled", 1, 0)) 
+  
+  # Check and modify factor levels for valid names
+  levels(data$PITCHCALL) <- make.names(levels(data$PITCHCALL))
+  levels(data$Balls3_Strikes0) <- make.names(levels(data$Balls3_Strikes0))
+  levels(data$Balls0_Strikes2) <- make.names(levels(data$Balls0_Strikes2))
+  
+  
+  # Specify features to consider 
+  # Going with a larger initial set as the model will remove features it 
+  # deems unnecessary
+  features <- c("PLATELOCHEIGHT", "PLATELOCSIDE", "Balls3_Strikes0", 
+                "Balls0_Strikes2", "RELHEIGHT", "RELSIDE", "RELSPEED", 
+                "VERTRELANGLE", "HORZRELANGLE", "HORZAPPRANGLE", 
+                "VERTAPPRANGLE")
+  
+  # Prepare data for the model
+  train_data <- data[, c(features, "PITCHCALL")]
+  
+  # Establishing the 10-fold cross validation
+  control <- trainControl(method = "cv", number = 10, savePredictions = TRUE, 
+                          classProbs = TRUE)
+  
+  # Train the Random Forest model with cross-validation and 100 trees
+  rf_model <- train(PITCHCALL ~ ., data = train_data, method = "rf", 
+                       trControl = control, ntree = 100, importance = TRUE)
+  
+  # Save the model 
+  saveRDS(rf_model, "framing_model_random_forest.rds")
+  
+  # Print model summary
+  print(rf_model)
+  
+  # View importance scores for each predictor
+  importance_scores <- varImp(rf_model, scale = FALSE)
+  print(importance_scores)
+
+  # Plot the importance scores
+  ggplot(importance_scores, aes(x = reorder(Feature, Importance), 
+                                y = Importance)) +
+    geom_bar(stat = "identity", fill = "skyblue") +
+    coord_flip() +
+    labs(title = "Feature Importance Scores", x = "Feature", 
+         y = "Importance Score") +
+    theme_minimal()
+}
+```
+
+```{r}
+# Apply the model to new data
+apply_random_forest_model <- function(input_path = "new_data.csv", 
+                                      output_path = "new_output.csv") {
+  
+  # Load the saved model 
+  rf_model <- readRDS("framing_model_random_forest.rds")
+  
+  # Load new data in
+  new_data <- read_csv(input_path)
+  
+  # Add same categorical variable as we did in the train set
+  new_data <- new_data %>%
+    mutate(
+      Balls3_Strikes0 = as.factor(ifelse(BALLS == 3 & STRIKES == 0, 'Count 3-0', 
+                                         'Count not 3-0')),
+      Balls0_Strikes2 = as.factor(ifelse(BALLS == 0 & STRIKES == 2, 'Count 0-2', 
+                                         'Count not 0-2')))
+  
+  # Just like train set, ensure the level names are acceptable according to R
+  levels(new_data$Balls3_Strikes0) <- 
+    make.names(levels(new_data$Balls3_Strikes0))
+  levels(new_data$Balls0_Strikes2) <- 
+    make.names(levels(new_data$Balls0_Strikes2))
+  
+  # Predict strike probability for each pitch
+  new_data$Predicted_Strike_Prob <- predict(rf_model, new_data, 
+                                            type = "prob")[, "X1"]
+  
+  # Create framing impact metric and aggregate
+  new_data <- new_data %>%
+    mutate(Actual_Strike = ifelse(PITCHCALL == "StrikeCalled", 1, 0),
+           Framing_Impact = Actual_Strike - Predicted_Strike_Prob)
+  
+  # Aggregate by catcher and year
+  aggregation <- new_data %>%
+    group_by(CATCHER_ID, GAME_YEAR) %>%
+    summarise(
+      OPPORTUNITIES = n(),
+      ACTUAL_CALLED_STRIKES = sum(Actual_Strike),
+      CALLED_STRIKES_ADDED = sum(Framing_Impact),
+      CALLED_STRIKES_ADDED_PER_100 = (sum(Framing_Impact) / n()) * 100
+    )
+  
+  # Save the output to CSV
+  write_csv(aggregation, output_path)
+}
+```
+
+```{r}
+# Call the function to train the model
+train_random_forest_model()
+```
+
+```{r}
+# Call the function to apply the model to the new data set
+apply_random_forest_model()
+```
